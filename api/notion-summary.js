@@ -1,24 +1,45 @@
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    }
+  });
+}
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    }
+  });
+}
 
+export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
-  const NOTION_DATA_SOURCE_ID = process.env.NOTION_DATA_SOURCE_ID;
 
-  if (!NOTION_API_KEY || !NOTION_DATA_SOURCE_ID) {
-    return res.status(500).json({
-      ok: false,
-      error: "FALTAN LAS VARIABLES DE ENTORNO EN VERCEL"
-    });
+  // Acepta ambos nombres para no obligarte a cambiar Vercel ahora mismo
+  const NOTION_DATABASE_ID =
+    process.env.NOTION_DATABASE_ID || process.env.NOTION_DATA_SOURCE_ID;
+
+  if (!NOTION_API_KEY || !NOTION_DATABASE_ID) {
+    return json(
+      {
+        ok: false,
+        error: "FALTAN LAS VARIABLES DE ENTORNO EN VERCEL"
+      },
+      500
+    );
   }
 
   const headers = {
-    "Authorization": `Bearer ${NOTION_API_KEY}`,
+    Authorization: `Bearer ${NOTION_API_KEY}`,
     "Notion-Version": "2026-03-11",
     "Content-Type": "application/json"
   };
@@ -29,16 +50,19 @@ export default async function handler(req, res) {
     "completado",
     "completed",
     "listo",
-    "finalizado"
+    "finalizado",
+    "terminado"
   ]);
 
   const relationTitleCache = new Map();
 
   function getTitleFromProperties(properties) {
     if (!properties) return "";
-    const titleProp = Object.values(properties).find((prop) => prop && prop.type === "title");
+    const titleProp = Object.values(properties).find(
+      (prop) => prop && prop.type === "title"
+    );
     if (!titleProp || !Array.isArray(titleProp.title)) return "";
-    return titleProp.title.map((t) => t.plain_text).join("").trim();
+    return titleProp.title.map((t) => t.plain_text || "").join("").trim();
   }
 
   function getStatusName(properties) {
@@ -57,6 +81,53 @@ export default async function handler(req, res) {
     const rel = properties?.["MATERIA"]?.relation;
     if (!Array.isArray(rel)) return [];
     return rel.map((item) => item.id);
+  }
+
+  function normalizeDate(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
+  }
+
+  function startOfWeekMonday(date) {
+    const d = new Date(date);
+    const day = d.getDay(); // 0 domingo, 1 lunes...
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function endOfWeekSunday(date) {
+    const d = startOfWeekMonday(date);
+    d.setDate(d.getDate() + 6);
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }
+
+  async function resolveDataSourceId() {
+    const response = await fetch(
+      `https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}`,
+      {
+        method: "GET",
+        headers
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`NO SE PUDO LEER LA BASE EN NOTION: ${errorText}`);
+    }
+
+    const database = await response.json();
+    const dataSourceId = database?.data_sources?.[0]?.id;
+
+    if (!dataSourceId) {
+      throw new Error("LA BASE NO DEVOLVIO NINGUN DATA SOURCE");
+    }
+
+    return dataSourceId;
   }
 
   async function getPageTitle(pageId) {
@@ -80,14 +151,14 @@ export default async function handler(req, res) {
     return title;
   }
 
-  async function queryAllPages() {
+  async function queryAllPages(dataSourceId) {
     let allResults = [];
     let hasMore = true;
     let nextCursor = undefined;
 
     while (hasMore) {
       const response = await fetch(
-        `https://api.notion.com/v1/data_sources/${NOTION_DATA_SOURCE_ID}/query`,
+        `https://api.notion.com/v1/data_sources/${dataSourceId}/query`,
         {
           method: "POST",
           headers,
@@ -106,43 +177,21 @@ export default async function handler(req, res) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText);
+        throw new Error(`ERROR EN QUERY A DATA SOURCE: ${errorText}`);
       }
 
       const data = await response.json();
       allResults = allResults.concat(data.results || []);
       hasMore = Boolean(data.has_more);
-      nextCursor = data.next_cursor;
+      nextCursor = data.next_cursor || undefined;
     }
 
     return allResults;
   }
 
-  function startOfWeekMonday(date) {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    d.setDate(d.getDate() + diff);
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }
-
-  function endOfWeekSunday(date) {
-    const d = startOfWeekMonday(date);
-    d.setDate(d.getDate() + 6);
-    d.setHours(23, 59, 59, 999);
-    return d;
-  }
-
-  function normalizeDate(dateStr) {
-    if (!dateStr) return null;
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return null;
-    return d;
-  }
-
   try {
-    const pages = await queryAllPages();
+    const resolvedDataSourceId = await resolveDataSourceId();
+    const pages = await queryAllPages(resolvedDataSourceId);
 
     const items = await Promise.all(
       pages.map(async (page) => {
@@ -184,9 +233,11 @@ export default async function handler(req, res) {
       .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
       .slice(0, 12);
 
-    return res.status(200).json({
+    return json({
       ok: true,
       today: now.toISOString(),
+      database_id: NOTION_DATABASE_ID,
+      data_source_id: resolvedDataSourceId,
       week: {
         start: weekStart.toISOString(),
         end: weekEnd.toISOString(),
@@ -196,10 +247,13 @@ export default async function handler(req, res) {
       upcoming
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: "ERROR CONSULTANDO NOTION",
-      detail: String(error.message || error)
-    });
+    return json(
+      {
+        ok: false,
+        error: "ERROR CONSULTANDO NOTION",
+        detail: String(error.message || error)
+      },
+      500
+    );
   }
 }
