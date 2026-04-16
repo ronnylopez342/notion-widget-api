@@ -23,7 +23,6 @@ export async function OPTIONS() {
 
 export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
-
   const NOTION_SOURCE_OR_DATABASE_ID =
     process.env.NOTION_DATABASE_ID || process.env.NOTION_DATA_SOURCE_ID;
 
@@ -53,7 +52,14 @@ export async function GET() {
     "terminado"
   ]);
 
-  const relationTitleCache = new Map();
+  function normalizeText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
   function getTitleFromProperties(properties) {
     if (!properties) return "";
@@ -67,27 +73,34 @@ export async function GET() {
   function getStatusName(properties) {
     const prop = properties?.["ESTADO"];
     if (!prop) return "";
+
     if (prop.status?.name) return prop.status.name;
     if (prop.select?.name) return prop.select.name;
+    if (prop.rich_text?.length) {
+      return prop.rich_text.map((t) => t.plain_text || "").join("").trim();
+    }
+
     return "";
   }
 
   function getTipoName(properties) {
     const prop = properties?.["TIPO"];
     if (!prop) return "";
+
     if (prop.status?.name) return prop.status.name;
     if (prop.select?.name) return prop.select.name;
+    if (Array.isArray(prop.multi_select) && prop.multi_select.length) {
+      return prop.multi_select.map((x) => x.name).join(", ");
+    }
+    if (prop.rich_text?.length) {
+      return prop.rich_text.map((t) => t.plain_text || "").join("").trim();
+    }
+
     return "";
   }
 
   function getDateValue(properties) {
     return properties?.["FECHA DE VENCIMIENTO"]?.date?.start || null;
-  }
-
-  function getRelationIds(properties) {
-    const rel = properties?.["MATERIA"]?.relation;
-    if (!Array.isArray(rel)) return [];
-    return rel.map((item) => item.id);
   }
 
   function normalizeDate(dateStr) {
@@ -97,53 +110,32 @@ export async function GET() {
     return d;
   }
 
-  function normalizeText(value) {
-    return String(value || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim();
-  }
-
   function classifyTipo(tipo) {
     const t = normalizeText(tipo);
 
-    if (
-      t.includes("entregable") ||
-      t.includes("entrega") ||
-      t.includes("quiz") ||
-      t.includes("parcial") ||
-      t.includes("proyecto") ||
-      t.includes("taller") ||
-      t.includes("caso")
-    ) {
-      return "entregable";
-    }
-
-    if (
-      t.includes("estudio autonomo") ||
-      t.includes("autonomo") ||
-      t.includes("estudiar") ||
-      t.includes("lectura") ||
-      t.includes("repaso")
-    ) {
-      return "estudio_autonomo";
-    }
+    if (t.includes("estudio autonomo")) return "estudio_autonomo";
+    if (t.includes("entregable")) return "entregable";
+    if (t.includes("entrega")) return "entregable";
 
     return "otro";
   }
 
-  function startOfWeekMonday(date) {
+  function isParcial(item) {
+    const objetivo = normalizeText(item.objetivo);
+    const tipo = normalizeText(item.tipo);
+    return objetivo.includes("parcial") || tipo.includes("parcial");
+  }
+
+  function startOfWeekSunday(date) {
     const d = new Date(date);
-    const day = d.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    d.setDate(d.getDate() + diff);
+    const day = d.getDay(); // domingo=0
+    d.setDate(d.getDate() - day);
     d.setHours(0, 0, 0, 0);
     return d;
   }
 
-  function endOfWeekSunday(date) {
-    const d = startOfWeekMonday(date);
+  function endOfWeekSaturday(date) {
+    const d = startOfWeekSunday(date);
     d.setDate(d.getDate() + 6);
     d.setHours(23, 59, 59, 999);
     return d;
@@ -189,27 +181,6 @@ export async function GET() {
     }
 
     return dataSourceId;
-  }
-
-  async function getPageTitle(pageId) {
-    if (relationTitleCache.has(pageId)) {
-      return relationTitleCache.get(pageId);
-    }
-
-    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-      method: "GET",
-      headers
-    });
-
-    if (!response.ok) {
-      relationTitleCache.set(pageId, "");
-      return "";
-    }
-
-    const page = await response.json();
-    const title = getTitleFromProperties(page.properties);
-    relationTitleCache.set(pageId, title);
-    return title;
   }
 
   async function queryAllPages(dataSourceId) {
@@ -259,28 +230,23 @@ export async function GET() {
     const resolvedDataSourceId = await resolveDataSourceId();
     const pages = await queryAllPages(resolvedDataSourceId);
 
-    const items = await Promise.all(
-      pages.map(async (page) => {
-        const properties = page.properties || {};
-        const objetivo = getTitleFromProperties(properties);
-        const fecha = getDateValue(properties);
-        const estado = getStatusName(properties);
-        const tipo = getTipoName(properties);
-        const categoria = classifyTipo(tipo);
-        const materiaIds = getRelationIds(properties);
-        const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
+    const items = pages.map((page) => {
+      const properties = page.properties || {};
+      const objetivo = getTitleFromProperties(properties);
+      const fecha = getDateValue(properties);
+      const estado = getStatusName(properties);
+      const tipo = getTipoName(properties);
+      const categoria = classifyTipo(tipo);
 
-        return {
-          id: page.id,
-          objetivo,
-          fecha,
-          estado,
-          tipo,
-          categoria,
-          materia: materiaTitles.filter(Boolean).join(", ")
-        };
-      })
-    );
+      return {
+        id: page.id,
+        objetivo,
+        fecha,
+        estado,
+        tipo,
+        categoria
+      };
+    });
 
     const pendingItems = items.filter((item) => {
       const estado = normalizeText(item.estado);
@@ -288,8 +254,8 @@ export async function GET() {
     });
 
     const now = new Date();
-    const weekStart = startOfWeekMonday(now);
-    const weekEnd = endOfWeekSunday(now);
+    const weekStart = startOfWeekSunday(now);
+    const weekEnd = endOfWeekSaturday(now);
 
     const thisWeek = pendingItems
       .filter((item) => {
@@ -298,21 +264,14 @@ export async function GET() {
       })
       .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
 
-    const upcoming = pendingItems
-      .filter((item) => normalizeDate(item.fecha))
-      .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
-      .slice(0, 12);
+    const parcialesWeek = thisWeek.filter((item) => isParcial(item));
 
     const entregablesWeek = thisWeek.filter(
-      (item) => item.categoria === "entregable"
+      (item) => item.categoria === "entregable" && !isParcial(item)
     );
 
     const estudioAutonomoWeek = thisWeek.filter(
       (item) => item.categoria === "estudio_autonomo"
-    );
-
-    const otrosWeek = thisWeek.filter(
-      (item) => item.categoria === "otro"
     );
 
     return json({
@@ -325,14 +284,10 @@ export async function GET() {
         end: weekEnd.toISOString(),
         total: thisWeek.length,
         entregables_total: entregablesWeek.length,
+        parciales_total: parcialesWeek.length,
         estudio_autonomo_total: estudioAutonomoWeek.length,
-        otros_total: otrosWeek.length,
-        items: thisWeek,
-        entregables: entregablesWeek,
-        estudio_autonomo: estudioAutonomoWeek,
-        otros: otrosWeek
-      },
-      upcoming
+        items: thisWeek
+      }
     });
   } catch (error) {
     return json(
