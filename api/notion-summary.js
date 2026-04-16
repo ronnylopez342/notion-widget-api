@@ -24,7 +24,6 @@ export async function OPTIONS() {
 export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
 
-  // ACEPTA AMBOS NOMBRES PARA NO OBLIGARTE A CAMBIAR VERCEL AHORA
   const NOTION_SOURCE_OR_DATABASE_ID =
     process.env.NOTION_DATABASE_ID || process.env.NOTION_DATA_SOURCE_ID;
 
@@ -73,6 +72,14 @@ export async function GET() {
     return "";
   }
 
+  function getTipoName(properties) {
+    const prop = properties?.["TIPO"];
+    if (!prop) return "";
+    if (prop.status?.name) return prop.status.name;
+    if (prop.select?.name) return prop.select.name;
+    return "";
+  }
+
   function getDateValue(properties) {
     return properties?.["FECHA DE VENCIMIENTO"]?.date?.start || null;
   }
@@ -90,9 +97,45 @@ export async function GET() {
     return d;
   }
 
+  function normalizeText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+  }
+
+  function classifyTipo(tipo) {
+    const t = normalizeText(tipo);
+
+    if (
+      t.includes("entregable") ||
+      t.includes("entrega") ||
+      t.includes("quiz") ||
+      t.includes("parcial") ||
+      t.includes("proyecto") ||
+      t.includes("taller") ||
+      t.includes("caso")
+    ) {
+      return "entregable";
+    }
+
+    if (
+      t.includes("estudio autonomo") ||
+      t.includes("autonomo") ||
+      t.includes("estudiar") ||
+      t.includes("lectura") ||
+      t.includes("repaso")
+    ) {
+      return "estudio_autonomo";
+    }
+
+    return "otro";
+  }
+
   function startOfWeekMonday(date) {
     const d = new Date(date);
-    const day = d.getDay(); // 0 domingo, 1 lunes...
+    const day = d.getDay();
     const diff = day === 0 ? -6 : 1 - day;
     d.setDate(d.getDate() + diff);
     d.setHours(0, 0, 0, 0);
@@ -107,7 +150,6 @@ export async function GET() {
   }
 
   async function resolveDataSourceId() {
-    // 1) PRIMERO INTENTA TRATAR EL ID COMO DATA SOURCE
     const dataSourceResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${NOTION_SOURCE_OR_DATABASE_ID}`,
       {
@@ -123,7 +165,6 @@ export async function GET() {
       }
     }
 
-    // 2) SI NO FUNCIONA, LO INTENTA COMO DATABASE
     const databaseResponse = await fetch(
       `https://api.notion.com/v1/databases/${NOTION_SOURCE_OR_DATABASE_ID}`,
       {
@@ -224,6 +265,8 @@ export async function GET() {
         const objetivo = getTitleFromProperties(properties);
         const fecha = getDateValue(properties);
         const estado = getStatusName(properties);
+        const tipo = getTipoName(properties);
+        const categoria = classifyTipo(tipo);
         const materiaIds = getRelationIds(properties);
         const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
 
@@ -232,13 +275,15 @@ export async function GET() {
           objetivo,
           fecha,
           estado,
+          tipo,
+          categoria,
           materia: materiaTitles.filter(Boolean).join(", ")
         };
       })
     );
 
     const pendingItems = items.filter((item) => {
-      const estado = (item.estado || "").toLowerCase().trim();
+      const estado = normalizeText(item.estado);
       return !doneStates.has(estado);
     });
 
@@ -258,6 +303,18 @@ export async function GET() {
       .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
       .slice(0, 12);
 
+    const entregablesWeek = thisWeek.filter(
+      (item) => item.categoria === "entregable"
+    );
+
+    const estudioAutonomoWeek = thisWeek.filter(
+      (item) => item.categoria === "estudio_autonomo"
+    );
+
+    const otrosWeek = thisWeek.filter(
+      (item) => item.categoria === "otro"
+    );
+
     return json({
       ok: true,
       today: now.toISOString(),
@@ -267,7 +324,13 @@ export async function GET() {
         start: weekStart.toISOString(),
         end: weekEnd.toISOString(),
         total: thisWeek.length,
-        items: thisWeek
+        entregables_total: entregablesWeek.length,
+        estudio_autonomo_total: estudioAutonomoWeek.length,
+        otros_total: otrosWeek.length,
+        items: thisWeek,
+        entregables: entregablesWeek,
+        estudio_autonomo: estudioAutonomoWeek,
+        otros: otrosWeek
       },
       upcoming
     });
