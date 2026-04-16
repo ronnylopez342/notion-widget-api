@@ -24,11 +24,11 @@ export async function OPTIONS() {
 export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
 
-  // Acepta ambos nombres para no obligarte a cambiar Vercel ahora mismo
-  const NOTION_DATABASE_ID =
+  // ACEPTA AMBOS NOMBRES PARA NO OBLIGARTE A CAMBIAR VERCEL AHORA
+  const NOTION_SOURCE_OR_DATABASE_ID =
     process.env.NOTION_DATABASE_ID || process.env.NOTION_DATA_SOURCE_ID;
 
-  if (!NOTION_API_KEY || !NOTION_DATABASE_ID) {
+  if (!NOTION_API_KEY || !NOTION_SOURCE_OR_DATABASE_ID) {
     return json(
       {
         ok: false,
@@ -107,20 +107,40 @@ export async function GET() {
   }
 
   async function resolveDataSourceId() {
-    const response = await fetch(
-      `https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}`,
+    // 1) PRIMERO INTENTA TRATAR EL ID COMO DATA SOURCE
+    const dataSourceResponse = await fetch(
+      `https://api.notion.com/v1/data_sources/${NOTION_SOURCE_OR_DATABASE_ID}`,
       {
         method: "GET",
         headers
       }
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`NO SE PUDO LEER LA BASE EN NOTION: ${errorText}`);
+    if (dataSourceResponse.ok) {
+      const dataSource = await dataSourceResponse.json();
+      if (dataSource?.id) {
+        return dataSource.id;
+      }
     }
 
-    const database = await response.json();
+    // 2) SI NO FUNCIONA, LO INTENTA COMO DATABASE
+    const databaseResponse = await fetch(
+      `https://api.notion.com/v1/databases/${NOTION_SOURCE_OR_DATABASE_ID}`,
+      {
+        method: "GET",
+        headers
+      }
+    );
+
+    if (!databaseResponse.ok) {
+      const dataSourceError = await dataSourceResponse.text().catch(() => "");
+      const databaseError = await databaseResponse.text().catch(() => "");
+      throw new Error(
+        `NO SE PUDO LEER NI COMO DATA SOURCE NI COMO DATABASE. DATA_SOURCE: ${dataSourceError} | DATABASE: ${databaseError}`
+      );
+    }
+
+    const database = await databaseResponse.json();
     const dataSourceId = database?.data_sources?.[0]?.id;
 
     if (!dataSourceId) {
@@ -157,21 +177,26 @@ export async function GET() {
     let nextCursor = undefined;
 
     while (hasMore) {
+      const body = {
+        sorts: [
+          {
+            property: "FECHA DE VENCIMIENTO",
+            direction: "ascending"
+          }
+        ],
+        page_size: 100
+      };
+
+      if (nextCursor) {
+        body.start_cursor = nextCursor;
+      }
+
       const response = await fetch(
         `https://api.notion.com/v1/data_sources/${dataSourceId}/query`,
         {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            sorts: [
-              {
-                property: "FECHA DE VENCIMIENTO",
-                direction: "ascending"
-              }
-            ],
-            page_size: 100,
-            start_cursor: nextCursor
-          })
+          body: JSON.stringify(body)
         }
       );
 
@@ -236,7 +261,7 @@ export async function GET() {
     return json({
       ok: true,
       today: now.toISOString(),
-      database_id: NOTION_DATABASE_ID,
+      source_or_database_id: NOTION_SOURCE_OR_DATABASE_ID,
       data_source_id: resolvedDataSourceId,
       week: {
         start: weekStart.toISOString(),
