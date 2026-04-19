@@ -57,10 +57,42 @@ export async function GET() {
     return titleProp.title.map((t) => t.plain_text || "").join("").trim();
   }
 
-  function getNumber(properties, key) {
+  function getNumericProperty(properties, key) {
     const prop = properties?.[key];
     if (!prop) return 0;
-    if (typeof prop.number === "number") return prop.number;
+
+    if (typeof prop.number === "number") {
+      return prop.number;
+    }
+
+    if (prop.formula) {
+      if (typeof prop.formula.number === "number") return prop.formula.number;
+      if (typeof prop.formula.string === "string") {
+        const parsed = Number(prop.formula.string.replace(",", "."));
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+    }
+
+    if (prop.rollup) {
+      if (typeof prop.rollup.number === "number") return prop.rollup.number;
+      if (Array.isArray(prop.rollup.array)) {
+        const nums = prop.rollup.array
+          .map((item) => {
+            if (typeof item.number === "number") return item.number;
+            if (item.formula?.number != null) return item.formula.number;
+            return 0;
+          })
+          .filter((n) => typeof n === "number");
+        return nums.reduce((a, b) => a + b, 0);
+      }
+    }
+
+    if (Array.isArray(prop.rich_text) && prop.rich_text.length) {
+      const text = prop.rich_text.map((t) => t.plain_text || "").join("").trim();
+      const parsed = Number(text.replace(",", "."));
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
     return 0;
   }
 
@@ -104,7 +136,7 @@ export async function GET() {
     const dataSourceId = database?.data_sources?.[0]?.id;
 
     if (!dataSourceId) {
-      throw new Error("LA BASE DE NOTAS NO DEVOLVIO NINGUN DATA SOURCE");
+      throw new Error("LA BASE DE NOTAS NO DEVOLVIÓ NINGÚN DATA SOURCE");
     }
 
     return dataSourceId;
@@ -176,9 +208,10 @@ export async function GET() {
       pages.map(async (page) => {
         const properties = page.properties || {};
         const nombre = normalizeText(getTitleFromProperties(properties));
-        const porcentaje = getNumber(properties, "PORCENTAJE");
-        const nota = getNumber(properties, "NOTA");
-        const notaFinal = getNumber(properties, "NOTA FINAL");
+        const porcentaje = getNumericProperty(properties, "PORCENTAJE");
+        const nota = getNumericProperty(properties, "NOTA");
+        const notaFinal = getNumericProperty(properties, "NOTA FINAL");
+
         const materiaIds = getRelationIds(properties);
         const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
         const materia = normalizeText(materiaTitles.filter(Boolean).join(", "));
@@ -204,9 +237,7 @@ export async function GET() {
           materia,
           total_nota_final: 0,
           porcentaje_evaluado: 0,
-          promedio_notas: 0,
-          items_registrados: [],
-          total_items_registrados: 0
+          items_registrados: []
         });
       }
 
@@ -242,11 +273,12 @@ export async function GET() {
           porcentaje_evaluado: Number(group.porcentaje_evaluado.toFixed(2)),
           promedio_notas: Number(promedio.toFixed(2)),
           total_items_registrados: group.items_registrados.length,
-          items_registrados: group.items_registrados.sort(
-            (a, b) => b.porcentaje - a.porcentaje
-          )
+          items_registrados: group.items_registrados
+            .filter((item) => item.nota > 0 || item.nota_final > 0)
+            .sort((a, b) => b.porcentaje - a.porcentaje)
         };
       })
+      .filter((group) => group.total_items_registrados > 0)
       .sort((a, b) => a.materia.localeCompare(b.materia));
 
     return json({
