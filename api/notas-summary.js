@@ -75,14 +75,20 @@ export async function GET() {
 
     if (prop.rollup) {
       if (typeof prop.rollup.number === "number") return prop.rollup.number;
+
       if (Array.isArray(prop.rollup.array)) {
         const nums = prop.rollup.array
           .map((item) => {
             if (typeof item.number === "number") return item.number;
-            if (item.formula?.number != null) return item.formula.number;
+            if (typeof item?.formula?.number === "number") return item.formula.number;
+            if (typeof item?.formula?.string === "string") {
+              const parsed = Number(item.formula.string.replace(",", "."));
+              return Number.isFinite(parsed) ? parsed : 0;
+            }
             return 0;
           })
           .filter((n) => typeof n === "number");
+
         return nums.reduce((a, b) => a + b, 0);
       }
     }
@@ -148,9 +154,7 @@ export async function GET() {
     let nextCursor = undefined;
 
     while (hasMore) {
-      const body = {
-        page_size: 100
-      };
+      const body = { page_size: 100 };
 
       if (nextCursor) {
         body.start_cursor = nextCursor;
@@ -210,7 +214,14 @@ export async function GET() {
         const nombre = normalizeText(getTitleFromProperties(properties));
         const porcentaje = getNumericProperty(properties, "PORCENTAJE");
         const nota = getNumericProperty(properties, "NOTA");
-        const notaFinal = getNumericProperty(properties, "NOTA FINAL");
+
+        // Si existe una propiedad real NOTA FINAL, la toma.
+        // Si no existe o viene en 0, la calcula.
+        const notaFinalReal = getNumericProperty(properties, "NOTA FINAL");
+        const notaFinalCalculada =
+          nota > 0 && porcentaje > 0 ? (porcentaje * nota) / 100 : 0;
+
+        const notaFinal = notaFinalReal > 0 ? notaFinalReal : notaFinalCalculada;
 
         const materiaIds = getRelationIds(properties);
         const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
@@ -246,7 +257,12 @@ export async function GET() {
 
       if (tieneNota) {
         group.total_nota_final += item.nota_final;
-        group.porcentaje_evaluado += item.porcentaje;
+
+        // Solo suma porcentaje evaluado cuando realmente hay nota > 0
+        if (item.nota > 0) {
+          group.porcentaje_evaluado += item.porcentaje;
+        }
+
         group.items_registrados.push({
           nombre: item.nombre,
           porcentaje: item.porcentaje,
@@ -278,7 +294,10 @@ export async function GET() {
             .sort((a, b) => b.porcentaje - a.porcentaje)
         };
       })
-      .filter((group) => group.total_items_registrados > 0)
+      .filter(
+        (group) =>
+          group.total_items_registrados > 0 && group.materia !== "SIN MATERIA"
+      )
       .sort((a, b) => a.materia.localeCompare(b.materia));
 
     return json({
