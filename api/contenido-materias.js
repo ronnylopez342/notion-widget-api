@@ -407,7 +407,9 @@ export async function GET() {
       base_id: NOTION_SOURCE_OR_DATABASE_ID,
       data_source_id: resolvedDataSourceId,
       total: items.length,
-      items
+      debug_first_page_properties: pages?.[0]?.properties || null,
+      debug_first_item: items?.[0] || null,
+      items: items.slice(0, 3)
     });
   } catch (error) {
     return json(
