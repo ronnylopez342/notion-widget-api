@@ -96,6 +96,7 @@ export async function GET() {
 
     if (prop.select?.name) return prop.select.name;
     if (prop.status?.name) return prop.status.name;
+
     if (Array.isArray(prop.rich_text)) {
       return prop.rich_text.map((t) => t.plain_text || "").join("").trim();
     }
@@ -181,42 +182,11 @@ export async function GET() {
     return date;
   }
 
-  function startOfDay(date) {
-    const x = new Date(date);
-    x.setHours(0, 0, 0, 0);
-    return x;
-  }
-
-  function endOfDay(date) {
-    const x = new Date(date);
-    x.setHours(23, 59, 59, 999);
-    return x;
-  }
-
-  function addDays(date, days) {
-    const x = new Date(date);
-    x.setDate(x.getDate() + days);
-    return x;
-  }
-
   function dateKey(date) {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, "0");
     const d = String(date.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
-  }
-
-  function mondayOfWeek(date) {
-    const d = startOfDay(date);
-    const day = d.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    return addDays(d, diff);
-  }
-
-  function getWeekRange(date) {
-    const start = mondayOfWeek(date);
-    const end = endOfDay(addDays(start, 6));
-    return { start, end };
   }
 
   function isPendingStatus(value) {
@@ -228,38 +198,6 @@ export async function GET() {
       norm.includes("sin empezar") ||
       norm.includes("pending")
     );
-  }
-
-  function groupByUnidad(items) {
-    const map = new Map();
-
-    for (const item of items) {
-      const unidad = item.unidad || "SIN UNIDAD";
-
-      if (!map.has(unidad)) {
-        map.set(unidad, {
-          unidad,
-          total: 0,
-          temas: []
-        });
-      }
-
-      const group = map.get(unidad);
-      group.total += 1;
-      group.temas.push({
-        tema: item.tema,
-        fecha: item.fecha_texto || item.fecha_iso || item.fecha_key,
-        anexos: item.anexos
-      });
-    }
-
-    return Array.from(map.values())
-      .map((group) => ({
-        unidad: group.unidad,
-        total: group.total,
-        temas: group.temas
-      }))
-      .sort((a, b) => a.unidad.localeCompare(b.unidad));
   }
 
   async function resolveDataSourceId() {
@@ -341,13 +279,6 @@ export async function GET() {
     const resolvedDataSourceId = await resolveDataSourceId();
     const pages = await queryAllPages(resolvedDataSourceId);
 
-    const now = new Date();
-    const today = startOfDay(now);
-    const weekRange = getWeekRange(now);
-    const todayKey = dateKey(today);
-    const weekStartKey = dateKey(weekRange.start);
-    const weekEndKey = dateKey(weekRange.end);
-
     const items = pages
       .map((page) => {
         const properties = page.properties || {};
@@ -358,6 +289,7 @@ export async function GET() {
 
         const unidad = normalizeUpper(getRichText(properties, "UNIDAD"));
         const anexos = normalizeUpper(getRichText(properties, "ANEXOS"));
+
         const estado =
           normalizeUpper(resolveSelectLike(properties, "EST")) ||
           normalizeUpper(resolveSelectLike(properties, "ESTADO"));
@@ -380,69 +312,29 @@ export async function GET() {
           id: page.id,
           tema,
           unidad,
-          anexos,
-          estado,
           fecha_iso: fechaISO,
           fecha_texto: fechaTexto,
           fecha_key: fechaKey,
-          pending
+          anexos,
+          estado,
+          pendiente: pending
         };
       })
-      .filter((item) => item.tema && item.fecha_key);
-
-    const todayItems = items
-      .filter((item) => item.pending && item.fecha_key === todayKey)
-      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
-
-    const weekItems = items
-      .filter(
-        (item) =>
-          item.pending &&
-          item.fecha_key >= weekStartKey &&
-          item.fecha_key <= weekEndKey
-      )
-      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
-
-    const futureItems = items
-      .filter((item) => item.pending && item.fecha_key > todayKey)
-      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
-
-    const overdueItems = items
-      .filter((item) => item.pending && item.fecha_key < todayKey)
-      .sort((a, b) => b.fecha_key.localeCompare(a.fecha_key));
-
-    let modo = "semana";
-    let baseItems = weekItems;
-
-    if (weekItems.length === 0 && futureItems.length > 0) {
-      modo = "proximos";
-      baseItems = futureItems.slice(0, 12);
-    } else if (weekItems.length === 0 && futureItems.length === 0 && overdueItems.length > 0) {
-      modo = "atrasados";
-      baseItems = overdueItems.slice(0, 12);
-    }
-
-    const grouped = groupByUnidad(baseItems);
+      .sort((a, b) => {
+        if (a.fecha_key && b.fecha_key && a.fecha_key !== b.fecha_key) {
+          return a.fecha_key.localeCompare(b.fecha_key);
+        }
+        if (a.fecha_key && !b.fecha_key) return -1;
+        if (!a.fecha_key && b.fecha_key) return 1;
+        return a.tema.localeCompare(b.tema);
+      });
 
     return json({
       ok: true,
-      today: today.toISOString(),
       base_id: NOTION_SOURCE_OR_DATABASE_ID,
       data_source_id: resolvedDataSourceId,
-      summary: {
-        hoy_total: todayItems.length,
-        semana_total: weekItems.length,
-        proximos_total: futureItems.length,
-        atrasados_total: overdueItems.length,
-        modo_semana: modo
-      },
-      hoy: todayItems.map((item) => ({
-        tema: item.tema,
-        unidad: item.unidad,
-        fecha: item.fecha_texto || item.fecha_iso || item.fecha_key,
-        anexos: item.anexos
-      })),
-      semana: grouped
+      total: items.length,
+      items
     });
   } catch (error) {
     return json(
