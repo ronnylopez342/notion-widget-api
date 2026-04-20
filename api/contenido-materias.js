@@ -42,6 +42,8 @@ export async function GET() {
     "Content-Type": "application/json"
   };
 
+  const relationTitleCache = new Map();
+
   function normalizeText(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
   }
@@ -120,6 +122,33 @@ export async function GET() {
     }
 
     return "";
+  }
+
+  function getRelationIds(properties, key) {
+    const rel = properties?.[key]?.relation;
+    if (!Array.isArray(rel)) return [];
+    return rel.map((item) => item.id);
+  }
+
+  async function getPageTitle(pageId) {
+    if (relationTitleCache.has(pageId)) {
+      return relationTitleCache.get(pageId);
+    }
+
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: "GET",
+      headers
+    });
+
+    if (!response.ok) {
+      relationTitleCache.set(pageId, "");
+      return "";
+    }
+
+    const page = await response.json();
+    const title = getTitleFromProperties(page.properties);
+    relationTitleCache.set(pageId, title);
+    return title;
   }
 
   function parseSpanishDateText(text) {
@@ -297,8 +326,8 @@ export async function GET() {
     const resolvedDataSourceId = await resolveDataSourceId();
     const pages = await queryAllPages(resolvedDataSourceId);
 
-    const items = pages
-      .map((page) => {
+    const items = await Promise.all(
+      pages.map(async (page) => {
         const properties = page.properties || {};
 
         const tema =
@@ -307,9 +336,6 @@ export async function GET() {
 
         const unidad = normalizeUpper(getRichText(properties, "UNIDAD"));
         const anexos = normalizeUpper(getRichText(properties, "ANEXOS"));
-        const materia =
-          normalizeUpper(getRichText(properties, "MATERIA")) ||
-          normalizeUpper(resolveSelectLike(properties, "MATERIA"));
 
         const estado =
           normalizeUpper(resolveSelectLike(properties, "ESTADO")) ||
@@ -327,6 +353,17 @@ export async function GET() {
         }
 
         const fechaKey = parsedDate ? dateKey(parsedDate) : "";
+
+        const materiaIds = getRelationIds(properties, "MATERIA");
+        const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
+        const materiaRelacion = normalizeUpper(materiaTitles.filter(Boolean).join(", "));
+
+        const materiaTexto =
+          normalizeUpper(getRichText(properties, "MATERIA")) ||
+          normalizeUpper(resolveSelectLike(properties, "MATERIA"));
+
+        const materia = materiaRelacion || materiaTexto || "SIN MATERIA";
+
         const pendiente = isPendingStatus(estado) || !estado;
         const orden = getNumber(properties, "#");
 
@@ -340,29 +377,30 @@ export async function GET() {
           unidad,
           anexos,
           estado,
-          materia: materia || "SIN MATERIA",
+          materia,
           pendiente
         };
       })
-      .filter((item) => item.tema)
-      .sort((a, b) => {
-        if (a.materia !== b.materia) {
-          return a.materia.localeCompare(b.materia);
-        }
+    );
 
-        if (a.orden !== b.orden) {
-          return a.orden - b.orden;
-        }
+    items.sort((a, b) => {
+      if (a.materia !== b.materia) {
+        return a.materia.localeCompare(b.materia);
+      }
 
-        if (a.fecha_key && b.fecha_key && a.fecha_key !== b.fecha_key) {
-          return a.fecha_key.localeCompare(b.fecha_key);
-        }
+      if (a.orden !== b.orden) {
+        return a.orden - b.orden;
+      }
 
-        if (a.fecha_key && !b.fecha_key) return -1;
-        if (!a.fecha_key && b.fecha_key) return 1;
+      if (a.fecha_key && b.fecha_key && a.fecha_key !== b.fecha_key) {
+        return a.fecha_key.localeCompare(b.fecha_key);
+      }
 
-        return a.tema.localeCompare(b.tema);
-      });
+      if (a.fecha_key && !b.fecha_key) return -1;
+      if (!a.fecha_key && b.fecha_key) return 1;
+
+      return a.tema.localeCompare(b.tema);
+    });
 
     return json({
       ok: true,
