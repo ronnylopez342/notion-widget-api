@@ -306,7 +306,7 @@ export async function GET() {
         }
 
         const fechaKey = parsedDate ? dateKey(parsedDate) : "";
-        const pending = isPendingStatus(estado) || !estado;
+        const pendiente = isPendingStatus(estado) || !estado;
 
         return {
           id: page.id,
@@ -317,7 +317,7 @@ export async function GET() {
           fecha_key: fechaKey,
           anexos,
           estado,
-          pendiente: pending
+          pendiente
         };
       })
       .sort((a, b) => {
