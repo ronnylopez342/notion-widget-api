@@ -230,6 +230,38 @@ export async function GET() {
     );
   }
 
+  function groupByUnidad(items) {
+    const map = new Map();
+
+    for (const item of items) {
+      const unidad = item.unidad || "SIN UNIDAD";
+
+      if (!map.has(unidad)) {
+        map.set(unidad, {
+          unidad,
+          total: 0,
+          temas: []
+        });
+      }
+
+      const group = map.get(unidad);
+      group.total += 1;
+      group.temas.push({
+        tema: item.tema,
+        fecha: item.fecha_texto || item.fecha_iso || item.fecha_key,
+        anexos: item.anexos
+      });
+    }
+
+    return Array.from(map.values())
+      .map((group) => ({
+        unidad: group.unidad,
+        total: group.total,
+        temas: group.temas
+      }))
+      .sort((a, b) => a.unidad.localeCompare(b.unidad));
+  }
+
   async function resolveDataSourceId() {
     const dataSourceResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${NOTION_SOURCE_OR_DATABASE_ID}`,
@@ -358,46 +390,39 @@ export async function GET() {
       })
       .filter((item) => item.tema && item.fecha_key);
 
-    const todayItems = items.filter(
-      (item) => item.pending && item.fecha_key === todayKey
-    );
+    const todayItems = items
+      .filter((item) => item.pending && item.fecha_key === todayKey)
+      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
 
-    const weekItems = items.filter(
-      (item) =>
-        item.pending &&
-        item.fecha_key >= weekStartKey &&
-        item.fecha_key <= weekEndKey
-    );
+    const weekItems = items
+      .filter(
+        (item) =>
+          item.pending &&
+          item.fecha_key >= weekStartKey &&
+          item.fecha_key <= weekEndKey
+      )
+      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
 
-    const weekByUnidadMap = new Map();
+    const futureItems = items
+      .filter((item) => item.pending && item.fecha_key > todayKey)
+      .sort((a, b) => a.fecha_key.localeCompare(b.fecha_key));
 
-    for (const item of weekItems) {
-      const unidad = item.unidad || "SIN UNIDAD";
+    const overdueItems = items
+      .filter((item) => item.pending && item.fecha_key < todayKey)
+      .sort((a, b) => b.fecha_key.localeCompare(a.fecha_key));
 
-      if (!weekByUnidadMap.has(unidad)) {
-        weekByUnidadMap.set(unidad, {
-          unidad,
-          total: 0,
-          temas: []
-        });
-      }
+    let modo = "semana";
+    let baseItems = weekItems;
 
-      const group = weekByUnidadMap.get(unidad);
-      group.total += 1;
-      group.temas.push({
-        tema: item.tema,
-        fecha: item.fecha_texto || item.fecha_iso || item.fecha_key,
-        anexos: item.anexos
-      });
+    if (weekItems.length === 0 && futureItems.length > 0) {
+      modo = "proximos";
+      baseItems = futureItems.slice(0, 12);
+    } else if (weekItems.length === 0 && futureItems.length === 0 && overdueItems.length > 0) {
+      modo = "atrasados";
+      baseItems = overdueItems.slice(0, 12);
     }
 
-    const weekByUnidad = Array.from(weekByUnidadMap.values())
-      .map((group) => ({
-        unidad: group.unidad,
-        total: group.total,
-        temas: group.temas
-      }))
-      .sort((a, b) => a.unidad.localeCompare(b.unidad));
+    const grouped = groupByUnidad(baseItems);
 
     return json({
       ok: true,
@@ -407,7 +432,9 @@ export async function GET() {
       summary: {
         hoy_total: todayItems.length,
         semana_total: weekItems.length,
-        parcial_activo: weekItems[0]?.unidad || ""
+        proximos_total: futureItems.length,
+        atrasados_total: overdueItems.length,
+        modo_semana: modo
       },
       hoy: todayItems.map((item) => ({
         tema: item.tema,
@@ -415,7 +442,7 @@ export async function GET() {
         fecha: item.fecha_texto || item.fecha_iso || item.fecha_key,
         anexos: item.anexos
       })),
-      semana: weekByUnidad
+      semana: grouped
     });
   } catch (error) {
     return json(
