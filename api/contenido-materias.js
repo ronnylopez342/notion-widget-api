@@ -354,9 +354,9 @@ export async function GET() {
 
         const fechaKey = parsedDate ? dateKey(parsedDate) : "";
 
-        const materiaIds = getRelationIds(properties, "MATERIA");
-        const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
-        const materiaRelacion = normalizeUpper(materiaTitles.filter(Boolean).join(", "));
+        const prioridadIds = getRelationIds(properties, "PRIORIDADES");
+        const prioridadTitles = await Promise.all(prioridadIds.map(getPageTitle));
+        const materiaRelacion = normalizeUpper(prioridadTitles.filter(Boolean).join(", "));
 
         const materiaTexto =
           normalizeUpper(getRichText(properties, "MATERIA")) ||
