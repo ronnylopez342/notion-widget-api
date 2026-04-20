@@ -78,7 +78,6 @@ export async function GET() {
     }
 
     if (typeof prop.number === "number") return String(prop.number);
-
     if (prop.select?.name) return prop.select.name;
     if (prop.status?.name) return prop.status.name;
 
@@ -100,6 +99,7 @@ export async function GET() {
     if (Array.isArray(prop.rich_text)) {
       return prop.rich_text.map((t) => t.plain_text || "").join("").trim();
     }
+
     return "";
   }
 
@@ -135,7 +135,28 @@ export async function GET() {
       diciembre: 11
     };
 
-    const cleaned = raw.replace(/\./g, "").replace(/\s+/g, "");
+    const weekdays = [
+      "lunes",
+      "martes",
+      "miercoles",
+      "miércoles",
+      "jueves",
+      "viernes",
+      "sabado",
+      "sábado",
+      "domingo"
+    ];
+
+    let cleaned = raw.replace(/\./g, "").replace(/\s+/g, "");
+
+    for (const dayName of weekdays) {
+      const prefix = `${normalizeLoose(dayName)}/`;
+      if (cleaned.startsWith(prefix)) {
+        cleaned = cleaned.slice(prefix.length);
+        break;
+      }
+    }
+
     const match = cleaned.match(/(\d{1,2})\/([a-z]+)(?:\/(\d{2,4}))?/);
 
     if (!match) return null;
