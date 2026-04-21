@@ -24,7 +24,7 @@ export async function OPTIONS() {
 export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
   const NOTION_SOURCE_OR_DATABASE_ID =
-    process.env.NOTION_CONTENIDO_MATERIA_ID || process.env.NOTION_DATABASE_ID;
+    process.env.NOTION_NOTAS_ID || process.env.NOTION_DATABASE_ID;
 
   if (!NOTION_API_KEY || !NOTION_SOURCE_OR_DATABASE_ID) {
     return json(
@@ -48,20 +48,6 @@ export async function GET() {
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  function normalizeUpper(value) {
-    return normalizeText(value).toUpperCase();
-  }
-
-  function removeAccents(value) {
-    return String(value || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "");
-  }
-
-  function normalizeLoose(value) {
-    return removeAccents(normalizeText(value)).toLowerCase();
-  }
-
   function getTitleFromProperties(properties) {
     if (!properties) return "";
     const titleProp = Object.values(properties).find(
@@ -71,197 +57,55 @@ export async function GET() {
     return titleProp.title.map((t) => t.plain_text || "").join("").trim();
   }
 
-  function findProperty(properties, candidateNames) {
-    if (!properties) return null;
+  function getNumericProperty(properties, key) {
+    const prop = properties?.[key];
+    if (!prop) return 0;
 
-    const entries = Object.entries(properties);
-    const normalizedCandidates = candidateNames.map((name) => normalizeLoose(name));
+    if (typeof prop.number === "number") {
+      return prop.number;
+    }
 
-    for (const [key, value] of entries) {
-      const normKey = normalizeLoose(key);
-      if (normalizedCandidates.includes(normKey)) {
-        return value;
+    if (prop.formula) {
+      if (typeof prop.formula.number === "number") return prop.formula.number;
+      if (typeof prop.formula.string === "string") {
+        const parsed = Number(prop.formula.string.replace(",", "."));
+        return Number.isFinite(parsed) ? parsed : 0;
       }
     }
 
-    return null;
-  }
+    if (prop.rollup) {
+      if (typeof prop.rollup.number === "number") return prop.rollup.number;
 
-  function getTextFromProperty(prop) {
-    if (!prop) return "";
+      if (Array.isArray(prop.rollup.array)) {
+        const nums = prop.rollup.array
+          .map((item) => {
+            if (typeof item.number === "number") return item.number;
+            if (typeof item?.formula?.number === "number") return item.formula.number;
+            if (typeof item?.formula?.string === "string") {
+              const parsed = Number(item.formula.string.replace(",", "."));
+              return Number.isFinite(parsed) ? parsed : 0;
+            }
+            return 0;
+          })
+          .filter((n) => typeof n === "number");
 
-    if (Array.isArray(prop.rich_text)) {
-      return prop.rich_text.map((t) => t.plain_text || "").join("").trim();
+        return nums.reduce((a, b) => a + b, 0);
+      }
     }
 
-    if (Array.isArray(prop.title)) {
-      return prop.title.map((t) => t.plain_text || "").join("").trim();
-    }
-
-    if (prop.select?.name) return prop.select.name;
-    if (prop.status?.name) return prop.status.name;
-
-    if (typeof prop.number === "number") return String(prop.number);
-
-    if (prop.formula) {
-      if (typeof prop.formula.string === "string") return prop.formula.string;
-      if (typeof prop.formula.number === "number") return String(prop.formula.number);
-    }
-
-    return "";
-  }
-
-  function getRichTextByNames(properties, names) {
-    return normalizeText(getTextFromProperty(findProperty(properties, names)));
-  }
-
-  function getDateByNames(properties, names) {
-    const prop = findProperty(properties, names);
-    if (!prop || !prop.date || !prop.date.start) return "";
-    return String(prop.date.start).slice(0, 10);
-  }
-
-  function getNumberByNames(properties, names) {
-    const prop = findProperty(properties, names);
-    if (!prop) return 0;
-
-    if (typeof prop.number === "number") return prop.number;
-
-    if (prop.formula && typeof prop.formula.number === "number") {
-      return prop.formula.number;
-    }
-
-    if (Array.isArray(prop.rich_text)) {
-      const raw = prop.rich_text.map((t) => t.plain_text || "").join("").trim();
-      const parsed = Number(raw.replace(",", "."));
+    if (Array.isArray(prop.rich_text) && prop.rich_text.length) {
+      const text = prop.rich_text.map((t) => t.plain_text || "").join("").trim();
+      const parsed = Number(text.replace(",", "."));
       return Number.isFinite(parsed) ? parsed : 0;
     }
 
     return 0;
   }
 
-  function getRelationIdsByNames(properties, names) {
-    const prop = findProperty(properties, names);
-    const rel = prop?.relation;
+  function getRelationIds(properties) {
+    const rel = properties?.["Materias"]?.relation;
     if (!Array.isArray(rel)) return [];
     return rel.map((item) => item.id);
-  }
-
-  async function getPageTitle(pageId) {
-    if (relationTitleCache.has(pageId)) {
-      return relationTitleCache.get(pageId);
-    }
-
-    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-      method: "GET",
-      headers
-    });
-
-    if (!response.ok) {
-      relationTitleCache.set(pageId, "");
-      return "";
-    }
-
-    const page = await response.json();
-    const title = getTitleFromProperties(page.properties);
-    relationTitleCache.set(pageId, title);
-    return title;
-  }
-
-  function parseSpanishDateText(text) {
-    const raw = normalizeLoose(text);
-    if (!raw) return null;
-
-    const months = {
-      ene: 0,
-      enero: 0,
-      feb: 1,
-      febrero: 1,
-      mar: 2,
-      marzo: 2,
-      abr: 3,
-      abril: 3,
-      may: 4,
-      mayo: 4,
-      jun: 5,
-      junio: 5,
-      jul: 6,
-      julio: 6,
-      ago: 7,
-      agosto: 7,
-      sep: 8,
-      sept: 8,
-      septiembre: 8,
-      oct: 9,
-      octubre: 9,
-      nov: 10,
-      noviembre: 10,
-      dic: 11,
-      diciembre: 11
-    };
-
-    const weekdays = [
-      "lunes",
-      "martes",
-      "miercoles",
-      "miércoles",
-      "jueves",
-      "viernes",
-      "sabado",
-      "sábado",
-      "domingo"
-    ];
-
-    let cleaned = raw.replace(/\./g, "").replace(/\s+/g, "");
-
-    for (const dayName of weekdays) {
-      const prefix = `${normalizeLoose(dayName)}/`;
-      if (cleaned.startsWith(prefix)) {
-        cleaned = cleaned.slice(prefix.length);
-        break;
-      }
-    }
-
-    const match = cleaned.match(/(\d{1,2})\/([a-z]+)(?:\/(\d{2,4}))?/);
-
-    if (!match) return null;
-
-    const day = Number(match[1]);
-    const monthToken = match[2];
-    const yearToken = match[3];
-
-    if (!day || !(monthToken in months)) return null;
-
-    const month = months[monthToken];
-    const now = new Date();
-    let year = now.getFullYear();
-
-    if (yearToken) {
-      year = Number(yearToken.length === 2 ? `20${yearToken}` : yearToken);
-    }
-
-    const date = new Date(year, month, day);
-    if (Number.isNaN(date.getTime())) return null;
-
-    return date;
-  }
-
-  function dateKey(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
-  function isPendingStatus(value) {
-    const norm = normalizeLoose(value);
-    return (
-      norm.includes("pend") ||
-      norm.includes("por hacer") ||
-      norm.includes("to do") ||
-      norm.includes("sin empezar") ||
-      norm.includes("pending")
-    );
   }
 
   async function resolveDataSourceId() {
@@ -298,7 +142,7 @@ export async function GET() {
     const dataSourceId = database?.data_sources?.[0]?.id;
 
     if (!dataSourceId) {
-      throw new Error("LA BASE DE CONTENIDO POR MATERIA NO DEVOLVIÓ NINGÚN DATA SOURCE");
+      throw new Error("LA BASE DE NOTAS NO DEVOLVIÓ NINGÚN DATA SOURCE");
     }
 
     return dataSourceId;
@@ -339,107 +183,131 @@ export async function GET() {
     return allResults;
   }
 
+  async function getPageTitle(pageId) {
+    if (relationTitleCache.has(pageId)) {
+      return relationTitleCache.get(pageId);
+    }
+
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: "GET",
+      headers
+    });
+
+    if (!response.ok) {
+      relationTitleCache.set(pageId, "");
+      return "";
+    }
+
+    const page = await response.json();
+    const title = getTitleFromProperties(page.properties);
+    relationTitleCache.set(pageId, title);
+    return title;
+  }
+
   try {
     const resolvedDataSourceId = await resolveDataSourceId();
     const pages = await queryAllPages(resolvedDataSourceId);
 
-    const items = await Promise.all(
+    const rawItems = await Promise.all(
       pages.map(async (page) => {
         const properties = page.properties || {};
+        const nombre = normalizeText(getTitleFromProperties(properties));
+        const porcentaje = getNumericProperty(properties, "PORCENTAJE");
+        const nota = getNumericProperty(properties, "NOTA");
 
-        const tema =
-          normalizeUpper(getRichTextByNames(properties, ["TEMA"])) ||
-          normalizeUpper(getTitleFromProperties(properties));
+        const notaFinalReal = getNumericProperty(properties, "NOTA FINAL");
+        const notaFinalCalculada =
+          nota > 0 && porcentaje > 0 ? (porcentaje * nota) / 100 : 0;
 
-        const unidad = normalizeUpper(getRichTextByNames(properties, ["UNIDAD"]));
-        const anexos = normalizeUpper(getRichTextByNames(properties, ["ANEXOS"]));
+        const notaFinal = notaFinalReal > 0 ? notaFinalReal : notaFinalCalculada;
 
-        const estado =
-          normalizeUpper(getRichTextByNames(properties, ["ESTADO", "EST"]));
-
-        const fechaISO = getDateByNames(properties, ["FECHA"]);
-        const fechaTexto = normalizeUpper(getRichTextByNames(properties, ["FECHA"]));
-
-        let parsedDate = null;
-
-        if (fechaISO) {
-          parsedDate = new Date(`${fechaISO}T00:00:00`);
-        } else if (fechaTexto) {
-          parsedDate = parseSpanishDateText(fechaTexto);
-        }
-
-        const fechaKey = parsedDate ? dateKey(parsedDate) : "";
-
-        const prioridadIds = getRelationIdsByNames(properties, [
-          "PRIORIDADES",
-          "PRIORIDAD",
-          "MATERIAS",
-          "MATERIA"
-        ]);
-
-        const prioridadTitles = await Promise.all(prioridadIds.map(getPageTitle));
-        const materiaRelacion = normalizeUpper(prioridadTitles.filter(Boolean).join(", "));
-
-        const materiaTexto = normalizeUpper(
-          getRichTextByNames(properties, ["MATERIA"])
-        );
-
-        const materia = materiaRelacion || materiaTexto || "SIN MATERIA";
-
-        const pendiente = isPendingStatus(estado) || !estado;
-        const orden = getNumberByNames(properties, ["#", "ORDEN", "NUMERO"]);
+        const materiaIds = getRelationIds(properties);
+        const materiaTitles = await Promise.all(materiaIds.map(getPageTitle));
+        const materia = normalizeText(materiaTitles.filter(Boolean).join(", "));
 
         return {
           id: page.id,
-          orden,
-          tema,
-          fecha_iso: fechaISO,
-          fecha_texto: fechaTexto,
-          fecha_key: fechaKey,
-          unidad,
-          anexos,
-          estado,
-          materia,
-          pendiente
+          nombre,
+          porcentaje,
+          nota,
+          nota_final: notaFinal,
+          materia
         };
       })
     );
 
-    items.sort((a, b) => {
-      if (a.materia !== b.materia) {
-        return a.materia.localeCompare(b.materia);
+    const grouped = new Map();
+
+    for (const item of rawItems) {
+      const materia = item.materia || "SIN MATERIA";
+
+      if (!grouped.has(materia)) {
+        grouped.set(materia, {
+          materia,
+          total_nota_final: 0,
+          porcentaje_evaluado: 0,
+          items_registrados: []
+        });
       }
 
-      if (a.orden !== b.orden) {
-        return a.orden - b.orden;
+      const group = grouped.get(materia);
+      const tieneNota = item.nota > 0 || item.nota_final > 0;
+
+      if (tieneNota) {
+        group.total_nota_final += item.nota_final;
+
+        if (item.nota > 0) {
+          group.porcentaje_evaluado += item.porcentaje;
+        }
+
+        group.items_registrados.push({
+          nombre: item.nombre,
+          porcentaje: item.porcentaje,
+          nota: item.nota,
+          nota_final: item.nota_final
+        });
       }
+    }
 
-      if (a.fecha_key && b.fecha_key && a.fecha_key !== b.fecha_key) {
-        return a.fecha_key.localeCompare(b.fecha_key);
-      }
+    const materias = Array.from(grouped.values())
+      .map((group) => {
+        const notasValidas = group.items_registrados
+          .map((item) => item.nota)
+          .filter((value) => value > 0);
 
-      if (a.fecha_key && !b.fecha_key) return -1;
-      if (!a.fecha_key && b.fecha_key) return 1;
+        const promedio =
+          notasValidas.length > 0
+            ? notasValidas.reduce((a, b) => a + b, 0) / notasValidas.length
+            : 0;
 
-      return a.tema.localeCompare(b.tema);
-    });
+        return {
+          materia: group.materia,
+          total_nota_final: Number(group.total_nota_final.toFixed(4)),
+          porcentaje_evaluado: Number(group.porcentaje_evaluado.toFixed(2)),
+          promedio_notas: Number(promedio.toFixed(2)),
+          total_items_registrados: group.items_registrados.length,
+          items_registrados: group.items_registrados
+            .filter((item) => item.nota > 0 || item.nota_final > 0)
+            .sort((a, b) => b.porcentaje - a.porcentaje)
+        };
+      })
+      .filter(
+        (group) =>
+          group.total_items_registrados > 0 && group.materia !== "SIN MATERIA"
+      )
+      .sort((a, b) => a.materia.localeCompare(b.materia));
 
     return json({
       ok: true,
-      base_id: NOTION_SOURCE_OR_DATABASE_ID,
+      source_or_database_id: NOTION_SOURCE_OR_DATABASE_ID,
       data_source_id: resolvedDataSourceId,
-      total: items.length,
-      debug_first_page_property_names: pages?.[0]?.properties
-        ? Object.keys(pages[0].properties)
-        : [],
-      debug_first_item: items?.[0] || null,
-      items
+      materias
     });
   } catch (error) {
     return json(
       {
         ok: false,
-        error: "ERROR CONSULTANDO CONTENIDO POR MATERIA EN NOTION",
+        error: "ERROR CONSULTANDO NOTAS EN NOTION",
         detail: String(error.message || error)
       },
       500
