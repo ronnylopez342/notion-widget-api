@@ -1,8 +1,8 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const NOTION_SOURCE_ID = process.env.NOTION_SOURCE_ID;
+const NOTION_TOKEN = process.env.NOTION_API_KEY;
+const NOTION_SOURCE_ID = process.env.NOTION_DATA_SOURCE_ID;
 const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
 
 const KV_URL = process.env.KV_REST_API_URL;
@@ -57,24 +57,31 @@ function uniqueSorted(arr) {
 
 function readRichText(prop) {
   if (!prop) return "";
+
   if (prop.type === "title") {
     return (prop.title || []).map(x => x.plain_text || "").join("").trim();
   }
+
   if (prop.type === "rich_text") {
     return (prop.rich_text || []).map(x => x.plain_text || "").join("").trim();
   }
+
   if (prop.type === "select") {
     return prop.select?.name || "";
   }
+
   if (prop.type === "multi_select") {
     return (prop.multi_select || []).map(x => x.name).join(", ");
   }
+
   if (prop.type === "status") {
     return prop.status?.name || "";
   }
+
   if (prop.type === "number") {
     return prop.number == null ? "" : String(prop.number);
   }
+
   if (prop.type === "formula") {
     const t = prop.formula?.type;
     if (t === "string") return prop.formula.string || "";
@@ -82,6 +89,7 @@ function readRichText(prop) {
     if (t === "boolean") return String(!!prop.formula.boolean);
     if (t === "date") return prop.formula.date?.start || "";
   }
+
   return "";
 }
 
@@ -177,7 +185,7 @@ async function notionFetch(path, body) {
     method: "POST",
     cache: "no-store",
     headers: {
-      "Authorization": `Bearer ${NOTION_TOKEN}`,
+      Authorization: `Bearer ${NOTION_TOKEN}`,
       "Notion-Version": NOTION_VERSION,
       "Content-Type": "application/json",
     },
@@ -199,12 +207,10 @@ async function notionFetch(path, body) {
 
 async function queryNotionAllPages() {
   if (!NOTION_TOKEN || !NOTION_SOURCE_ID) {
-    throw new Error("Faltan NOTION_TOKEN o NOTION_SOURCE_ID");
+    throw new Error("Faltan NOTION_API_KEY o NOTION_DATA_SOURCE_ID");
   }
 
-  const bodyBase = {
-    page_size: 100,
-  };
+  const bodyBase = { page_size: 100 };
 
   let all = [];
   let usedPath = null;
@@ -342,7 +348,7 @@ async function kvCommand(args) {
   const res = await fetch(KV_URL, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${KV_TOKEN}`,
+      Authorization: `Bearer ${KV_TOKEN}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(args),
