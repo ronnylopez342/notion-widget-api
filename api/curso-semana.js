@@ -24,37 +24,74 @@ export async function OPTIONS() {
   });
 }
 
-const SCHEDULE = {
-  1: [
-    "TECNOLOGÍA E INFRAESTRUCTURA DE CÓMPUTO",
-    "ELEMENTOS ESENCIALES DE LENGUAJES DE PROGRAMACIÓN"
-  ],
-  2: [
-    "DESARROLLO DE SW EN EQUIPO",
-    "COMPLEMENTARIA ÁLGEBRA LINEAL 1",
-    "FUNDAMENTOS DE BASES DE DATOS",
-    "TECNOLOGÍA E INFRAESTRUCTURA DE CÓMPUTO",
-    "CÁLCULO INTEGRAL CON ECUACIONES DIFERENCIALES",
-    "ELEMENTOS ESENCIALES DE LENGUAJES DE PROGRAMACIÓN"
-  ],
-  3: [
-    "DESARROLLO DE SW EN EQUIPO",
-    "ÁLGEBRA LINEAL 1",
-    "COMPLEMENTARIA CÁLCULO INTEGRAL"
-  ],
-  4: [
-    "COMPLEMENTARIA ÁLGEBRA LINEAL 1",
-    "FUNDAMENTOS DE BASES DE DATOS",
-    "TECNOLOGÍA E INFRAESTRUCTURA DE CÓMPUTO",
-    "CÁLCULO INTEGRAL CON ECUACIONES DIFERENCIALES"
-  ],
-  5: [
-    "ÁLGEBRA LINEAL 1",
-    "COMPLEMENTARIA CÁLCULO INTEGRAL"
-  ],
-  6: [],
-  0: []
-};
+const SUBJECTS = [
+  {
+    label: "TECNOLOGÍA E INFRAESTRUCTURA DE CÓMPUTO",
+    aliases: [
+      "TECNOLOGÍA E INFRAESTRUCTURA DE CÓMPUTO",
+      "TECNOLOGIA E INFRAESTRUCTURA DE COMPUTO",
+      "TIC"
+    ]
+  },
+  {
+    label: "ELEMENTOS ESENCIALES DE LENGUAJES DE PROGRAMACIÓN",
+    aliases: [
+      "ELEMENTOS ESENCIALES DE LENGUAJES DE PROGRAMACIÓN",
+      "ELEMENTOS ESENCIALES DE LENGUAJES DE PROGRAMACION",
+      "ISIS"
+    ]
+  },
+  {
+    label: "DESARROLLO DE SW EN EQUIPO",
+    aliases: [
+      "DESARROLLO DE SW EN EQUIPO",
+      "DESARROLLO DE SOFTWARE EN EQUIPO"
+    ]
+  },
+  {
+    label: "CÁLCULO INTEGRAL CON ECUACIONES DIFERENCIALES",
+    aliases: [
+      "CÁLCULO INTEGRAL CON ECUACIONES DIFERENCIALES",
+      "CALCULO INTEGRAL CON ECUACIONES DIFERENCIALES"
+    ]
+  },
+  {
+    label: "COMPLEMENTARIA CÁLCULO INTEGRAL",
+    aliases: [
+      "COMPLEMENTARIA CÁLCULO INTEGRAL",
+      "COMPLEMENTARIA CALCULO INTEGRAL"
+    ]
+  },
+  {
+    label: "ÁLGEBRA LINEAL 1",
+    aliases: [
+      "ÁLGEBRA LINEAL 1",
+      "ALGEBRA LINEAL 1"
+    ]
+  },
+  {
+    label: "COMPLEMENTARIA ÁLGEBRA LINEAL 1",
+    aliases: [
+      "COMPLEMENTARIA ÁLGEBRA LINEAL 1",
+      "COMPLEMENTARIA ALGEBRA LINEAL 1"
+    ]
+  },
+  {
+    label: "FUNDAMENTOS DE BASES DE DATOS",
+    aliases: [
+      "FUNDAMENTOS DE BASES DE DATOS",
+      "FUNDAMENTOS DE BD"
+    ]
+  },
+  {
+    label: "ENGLISH 8",
+    aliases: [
+      "ENGLISH 8",
+      "INGLÉS 8",
+      "INGLES 8"
+    ]
+  }
+];
 
 const DAY_NAMES = {
   0: "DOMINGO",
@@ -283,23 +320,6 @@ function isPendingStatus(value) {
   );
 }
 
-function uniqueSubjectsFromSchedule() {
-  const seen = new Set();
-  const result = [];
-
-  for (const day of Object.values(SCHEDULE)) {
-    for (const materia of day) {
-      const up = normalizeUpper(materia);
-      if (!seen.has(up)) {
-        seen.add(up);
-        result.push(up);
-      }
-    }
-  }
-
-  return result;
-}
-
 function getBogotaNow() {
   const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Bogota",
@@ -341,13 +361,6 @@ function mondayFromDateKey(dateKey) {
   const diff = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diff);
   return date;
-}
-
-function diffDays(dateKeyA, dateKeyB) {
-  if (!dateKeyA || !dateKeyB) return Number.POSITIVE_INFINITY;
-  const a = new Date(`${dateKeyA}T00:00:00`);
-  const b = new Date(`${dateKeyB}T00:00:00`);
-  return Math.abs((a.getTime() - b.getTime()) / 86400000);
 }
 
 async function resolveDataSourceId(sourceOrDatabaseId, headers) {
@@ -425,6 +438,11 @@ async function queryAllPages(dataSourceId, headers) {
   return allResults;
 }
 
+function subjectMatches(subjectDef, materiaValue) {
+  const canon = normalizeLoose(materiaValue);
+  return subjectDef.aliases.some((alias) => normalizeLoose(alias) === canon);
+}
+
 export async function GET() {
   const NOTION_API_KEY = process.env.NOTION_API_KEY;
   const NOTION_SOURCE_OR_DATABASE_ID =
@@ -477,8 +495,6 @@ export async function GET() {
 
     const weekStart = formatDateKey(monday);
     const weekEnd = formatDateKey(sunday);
-
-    const allSubjects = uniqueSubjectsFromSchedule();
 
     const resolvedDataSourceId = await resolveDataSourceId(
       NOTION_SOURCE_OR_DATABASE_ID,
@@ -547,18 +563,12 @@ export async function GET() {
     );
 
     const filtered = items
-      .filter(
-        (item) =>
-          item.pendiente &&
-          item.materia &&
-          item.materia !== "SIN MATERIA" &&
-          allSubjects.includes(item.materia)
-      )
+      .filter((item) => item.pendiente && item.materia && item.materia !== "SIN MATERIA")
       .sort(sortTopics);
 
-    const materias = allSubjects.map((materia) => {
+    const materias = SUBJECTS.map((subjectDef) => {
       const materiaItems = filtered
-        .filter((item) => item.materia === materia)
+        .filter((item) => subjectMatches(subjectDef, item.materia))
         .sort(sortTopics);
 
       const weekItems = materiaItems.filter(
@@ -570,7 +580,7 @@ export async function GET() {
 
       if (weekItems.length) {
         return {
-          materia,
+          materia: subjectDef.label,
           total: weekItems.length,
           mode: "TEMAS DE LA SEMANA",
           fecha_usada: weekItems[0].fecha_key,
@@ -580,7 +590,7 @@ export async function GET() {
 
       if (!materiaItems.length) {
         return {
-          materia,
+          materia: subjectDef.label,
           total: 0,
           mode: "AL DÍA",
           fecha_usada: "",
@@ -588,16 +598,36 @@ export async function GET() {
         };
       }
 
-      const nearest = [...materiaItems].sort(
-        (a, b) => diffDays(a.fecha_key, todayKey) - diffDays(b.fecha_key, todayKey)
-      )[0];
+      const futureItems = materiaItems.filter(
+        (item) => item.fecha_key && item.fecha_key >= todayKey
+      );
+
+      if (futureItems.length) {
+        const nearestDate = futureItems[0].fecha_key;
+        const nearestItems = futureItems.filter(
+          (item) => item.fecha_key === nearestDate
+        );
+
+        return {
+          materia: subjectDef.label,
+          total: nearestItems.length,
+          mode: "TEMA MÁS CERCANO",
+          fecha_usada: nearestDate,
+          items: nearestItems.slice(0, 6)
+        };
+      }
+
+      const latestPendingDate = materiaItems[materiaItems.length - 1]?.fecha_key || "";
+      const latestPendingItems = materiaItems.filter(
+        (item) => item.fecha_key === latestPendingDate
+      );
 
       return {
-        materia,
-        total: 1,
-        mode: "PRÓXIMO TEMA",
-        fecha_usada: nearest?.fecha_key || "",
-        items: nearest ? [nearest] : []
+        materia: subjectDef.label,
+        total: latestPendingItems.length,
+        mode: "TEMA MÁS CERCANO",
+        fecha_usada: latestPendingDate,
+        items: latestPendingItems.slice(0, 6)
       };
     });
 
@@ -608,7 +638,7 @@ export async function GET() {
       fecha_hoy: todayKey,
       semana_inicio: weekStart,
       semana_fin: weekEnd,
-      total_materias: allSubjects.length,
+      total_materias: SUBJECTS.length,
       materias
     };
 
