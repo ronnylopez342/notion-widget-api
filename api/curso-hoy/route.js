@@ -207,7 +207,6 @@ async function queryNotionAllPages() {
   };
 
   let all = [];
-  let nextCursor = null;
   let usedPath = null;
 
   async function runPaged(path) {
