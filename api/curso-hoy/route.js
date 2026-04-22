@@ -1,426 +1,365 @@
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
+<div id="cursohoy"></div>
+<script>
+const U="https://notion-widget-api-7nsm.vercel.app/api/curso-hoy";
+const $=s=>document.getElementById(s);
+const e=s=>String(s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+const f=d=>{if(!d)return"";let[a,b,c]=String(d).split("-");return`${c}/${b}`};
 
-const NOTION_TOKEN = process.env.NOTION_API_KEY;
-const NOTION_SOURCE_ID = process.env.NOTION_DATA_SOURCE_ID;
-const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
+fetch(U).then(r=>r.json()).then(d=>{
+  if(!d.ok||!Array.isArray(d.materias)) throw 0;
 
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+  $("cursohoy").innerHTML=`
+  <style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent}
+  #cursohoy{font-family:Inter,Arial,sans-serif;text-transform:uppercase}
 
-const CACHE_KEY = "curso_hoy:last_good:v1";
-
-const JSON_HEADERS = {
-  "Content-Type": "application/json; charset=utf-8",
-  "Cache-Control": "no-store, max-age=0, must-revalidate",
-};
-
-globalThis.__cursoHoyMemoryCache ??= null;
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: JSON_HEADERS,
-  });
-}
-
-function todayISO(timeZone = process.env.TZ_NAME || "America/Mexico_City") {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const y = parts.find(p => p.type === "year")?.value;
-  const m = parts.find(p => p.type === "month")?.value;
-  const d = parts.find(p => p.type === "day")?.value;
-
-  return `${y}-${m}-${d}`;
-}
-
-function normalizeText(value) {
-  return String(value || "").trim();
-}
-
-function normalizeForCompare(value) {
-  return normalizeText(value)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .toUpperCase();
-}
-
-function uniqueSorted(arr) {
-  return [...new Set(arr.filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
-}
-
-function readRichText(prop) {
-  if (!prop) return "";
-
-  if (prop.type === "title") {
-    return (prop.title || []).map(x => x.plain_text || "").join("").trim();
+  .w{
+    background:#fff;
+    border:1px solid #e2e8f0;
+    border-radius:18px;
+    padding:10px;
+    box-shadow:0 8px 20px rgba(15,23,42,.06)
   }
 
-  if (prop.type === "rich_text") {
-    return (prop.rich_text || []).map(x => x.plain_text || "").join("").trim();
+  .hero{text-align:center;margin-bottom:8px}
+
+  .pill{
+    display:inline-block;
+    padding:6px 10px;
+    border:1px solid #e2e8f0;
+    border-radius:999px;
+    background:#f8fafc;
+    font-size:9px;
+    font-weight:900;
+    color:#0f172a
   }
 
-  if (prop.type === "select") {
-    return prop.select?.name || "";
+  .title{
+    margin-top:8px;
+    font-size:24px;
+    line-height:1.05;
+    font-weight:900;
+    color:#0f172a;
+    text-align:center
   }
 
-  if (prop.type === "multi_select") {
-    return (prop.multi_select || []).map(x => x.name).join(", ");
+  .top{
+    margin:10px 0;
+    background:linear-gradient(180deg,#fff7ed 0%,#ffedd5 100%);
+    border:1px solid rgba(249,115,22,.2);
+    border-radius:14px;
+    padding:10px;
+    text-align:center
   }
 
-  if (prop.type === "status") {
-    return prop.status?.name || "";
+  .lab{
+    font-size:9px;
+    font-weight:900;
+    letter-spacing:.06em;
+    color:#64748b
   }
 
-  if (prop.type === "number") {
-    return prop.number == null ? "" : String(prop.number);
+  .val{
+    font-size:20px;
+    font-weight:900;
+    color:#0f172a;
+    margin-top:2px
   }
 
-  if (prop.type === "formula") {
-    const t = prop.formula?.type;
-    if (t === "string") return prop.formula.string || "";
-    if (t === "number") return prop.formula.number == null ? "" : String(prop.formula.number);
-    if (t === "boolean") return String(!!prop.formula.boolean);
-    if (t === "date") return prop.formula.date?.start || "";
+  .txt{
+    margin-top:4px;
+    font-size:10px;
+    line-height:1.35;
+    color:#475569;
+    font-weight:800;
+    overflow-wrap:anywhere;
+    word-break:break-word
   }
 
-  return "";
-}
-
-function readDate(prop) {
-  if (!prop) return "";
-  if (prop.type === "date") return prop.date?.start || "";
-  if (prop.type === "formula" && prop.formula?.type === "date") {
-    return prop.formula.date?.start || "";
-  }
-  return "";
-}
-
-function pickProp(props, candidates) {
-  for (const key of Object.keys(props || {})) {
-    const norm = normalizeForCompare(key);
-    if (candidates.some(c => normalizeForCompare(c) === norm)) {
-      return props[key];
-    }
-  }
-  return null;
-}
-
-function extractRow(page) {
-  const props = page?.properties || {};
-
-  const materia = readRichText(
-    pickProp(props, [
-      "Materia",
-      "Asignatura",
-      "Curso",
-      "Clase",
-      "Nombre materia",
-    ])
-  );
-
-  const tema = readRichText(
-    pickProp(props, [
-      "Tema",
-      "Contenido",
-      "Actividad",
-      "Título",
-      "Titulo",
-      "Nombre",
-    ])
-  );
-
-  const unidad = readRichText(
-    pickProp(props, [
-      "Unidad",
-      "Parcial",
-      "Bloque",
-      "Módulo",
-      "Modulo",
-      "Corte",
-    ])
-  );
-
-  const anexo = readRichText(
-    pickProp(props, [
-      "Anexo",
-      "Detalle",
-      "Descripción",
-      "Descripcion",
-      "Notas",
-      "Referencia",
-      "Libro",
-    ])
-  );
-
-  const fechaRaw = readDate(
-    pickProp(props, [
-      "Fecha",
-      "Fecha clase",
-      "Fecha de estudio",
-      "Día",
-      "Dia",
-    ])
-  );
-
-  const fechaIso = normalizeText(fechaRaw).slice(0, 10);
-
-  return {
-    materia: normalizeText(materia),
-    tema: normalizeText(tema),
-    unidad: normalizeText(unidad),
-    anexo: normalizeText(anexo),
-    fecha_iso: fechaIso,
-  };
-}
-
-async function notionFetch(path, body) {
-  const res = await fetch(`https://api.notion.com${path}`, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${NOTION_TOKEN}`,
-      "Notion-Version": NOTION_VERSION,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body || {}),
-  });
-
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) {
-    const err = new Error(data?.message || "Error consultando Notion");
-    err.status = res.status;
-    err.code = data?.code || "notion_error";
-    err.detail = data;
-    throw err;
+  .g{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px
   }
 
-  return data;
-}
-
-async function queryNotionAllPages() {
-  if (!NOTION_TOKEN || !NOTION_SOURCE_ID) {
-    throw new Error("Faltan NOTION_API_KEY o NOTION_DATA_SOURCE_ID");
+  .c{
+    background:#fff;
+    border:1px solid rgba(239,68,68,.16);
+    border-radius:16px;
+    padding:10px;
+    box-shadow:0 4px 12px rgba(15,23,42,.04);
+    text-align:center;
+    overflow:hidden
   }
 
-  const bodyBase = { page_size: 100 };
-
-  let all = [];
-  let usedPath = null;
-
-  async function runPaged(path) {
-    let results = [];
-    let cursor = null;
-
-    do {
-      const payload = {
-        ...bodyBase,
-        ...(cursor ? { start_cursor: cursor } : {}),
-      };
-
-      const data = await notionFetch(path, payload);
-      results.push(...(data.results || []));
-      cursor = data.has_more ? data.next_cursor : null;
-    } while (cursor);
-
-    return results;
+  .c.ok{
+    background:linear-gradient(180deg,#f0fdf4 0%,#dcfce7 100%);
+    border:1px solid rgba(34,197,94,.28)
   }
 
-  try {
-    usedPath = `/v1/data_sources/${NOTION_SOURCE_ID}/query`;
-    all = await runPaged(usedPath);
-  } catch (e1) {
-    usedPath = `/v1/databases/${NOTION_SOURCE_ID}/query`;
-    all = await runPaged(usedPath);
+  .c.near{
+    background:linear-gradient(180deg,#fffbeb 0%,#fef3c7 100%);
+    border:1px solid rgba(245,158,11,.28)
   }
 
-  return { results: all, usedPath };
-}
-
-function buildCursoHoyFromPages(pages) {
-  const hoy = todayISO();
-
-  const allRows = pages.map(extractRow).filter(r => r.materia);
-  const todasLasMaterias = uniqueSorted(allRows.map(r => r.materia));
-
-  if (!todasLasMaterias.length) {
-    throw new Error("No se encontraron materias válidas en Notion");
+  .h{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    margin-bottom:8px
   }
 
-  const materiasMap = new Map(
-    todasLasMaterias.map(m => [
-      m,
-      {
-        materia: m,
-        total: 0,
-        items: [],
-        estado: "al_dia",
-      },
-    ])
-  );
-
-  for (const row of allRows) {
-    if (row.fecha_iso !== hoy) continue;
-    if (!row.tema) continue;
-
-    const item = {
-      fecha_iso: row.fecha_iso,
-      fecha_key: row.fecha_iso,
-      unidad: row.unidad || "",
-      tema: row.tema,
-      anexo: row.anexo || "",
-    };
-
-    const bucket = materiasMap.get(row.materia);
-    bucket.items.push(item);
+  .dot{
+    width:14px;
+    height:14px;
+    border-radius:999px;
+    background:radial-gradient(circle at 30% 30%,#fb7185,#e11d48)
   }
 
-  const materias = [...materiasMap.values()].map(m => {
-    const total = m.items.length;
-    return {
-      ...m,
-      total,
-      estado: total === 0 ? "al_dia" : "con_temas",
-    };
-  });
-
-  return {
-    ok: true,
-    day: "HOY",
-    mode: "TEMAS DE HOY",
-    fecha_hoy: hoy,
-    total_materias_hoy: materias.filter(m => m.total > 0).length,
-    materias,
-  };
-}
-
-function validateStableResponse(data) {
-  if (!data || data.ok !== true) {
-    throw new Error("La respuesta no viene ok=true");
+  .dot.ok{
+    background:radial-gradient(circle at 30% 30%,#4ade80,#16a34a)
   }
 
-  if (!Array.isArray(data.materias) || data.materias.length === 0) {
-    throw new Error("La respuesta no trae materias válidas");
+  .dot.near{
+    background:radial-gradient(circle at 30% 30%,#fbbf24,#d97706)
   }
 
-  for (const m of data.materias) {
-    if (!normalizeText(m.materia)) {
-      throw new Error("Una materia viene sin nombre");
-    }
-
-    if (!Number.isInteger(m.total) || m.total < 0) {
-      throw new Error(`La materia ${m.materia} tiene total inválido`);
-    }
-
-    if (!Array.isArray(m.items)) {
-      throw new Error(`La materia ${m.materia} no trae items array`);
-    }
-
-    if (m.estado === "con_temas") {
-      if (m.total <= 0) {
-        throw new Error(`La materia ${m.materia} dice con_temas pero total <= 0`);
-      }
-      if (m.items.length !== m.total) {
-        throw new Error(`La materia ${m.materia} tiene total distinto a items.length`);
-      }
-    }
-
-    if (m.estado === "al_dia") {
-      if (m.total !== 0 || m.items.length !== 0) {
-        throw new Error(`La materia ${m.materia} dice al_dia pero trae datos`);
-      }
-    }
+  .m{
+    font-size:11px;
+    line-height:1.15;
+    font-weight:900;
+    color:#0f172a;
+    text-align:center;
+    overflow-wrap:anywhere;
+    word-break:break-word
   }
 
-  return true;
-}
-
-async function kvCommand(args) {
-  if (!KV_URL || !KV_TOKEN) return null;
-
-  const res = await fetch(KV_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${KV_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(args),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    throw new Error("No se pudo leer/escribir en KV");
+  .q{
+    min-width:24px;
+    height:24px;
+    padding:0 8px;
+    border:1px solid #e2e8f0;
+    border-radius:999px;
+    background:#f8fafc;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:10px;
+    font-weight:900;
+    margin:0 auto
   }
 
-  const data = await res.json();
-  return data?.result ?? null;
-}
-
-async function readLastGood() {
-  if (KV_URL && KV_TOKEN) {
-    const raw = await kvCommand(["GET", CACHE_KEY]);
-    return raw ? JSON.parse(raw) : null;
+  .c.ok .q{
+    background:#ecfdf5;
+    border-color:rgba(34,197,94,.25);
+    color:#166534
   }
 
-  return globalThis.__cursoHoyMemoryCache;
-}
-
-async function writeLastGood(value) {
-  if (KV_URL && KV_TOKEN) {
-    await kvCommand(["SET", CACHE_KEY, JSON.stringify(value)]);
-    return;
+  .c.near .q{
+    background:#fffbeb;
+    border-color:rgba(245,158,11,.28);
+    color:#92400e
   }
 
-  globalThis.__cursoHoyMemoryCache = value;
-}
-
-export async function GET() {
-  let lastGood = null;
-
-  try {
-    lastGood = await readLastGood();
-
-    const { results, usedPath } = await queryNotionAllPages();
-    const fresh = buildCursoHoyFromPages(results);
-
-    validateStableResponse(fresh);
-
-    const stable = {
-      ...fresh,
-      stale: false,
-      generated_at: new Date().toISOString(),
-      source: usedPath,
-    };
-
-    await writeLastGood(stable);
-
-    return json(stable, 200);
-  } catch (err) {
-    if (lastGood) {
-      return json(
-        {
-          ...lastGood,
-          stale: true,
-          fallback_reason: err?.message || "Error desconocido",
-        },
-        200
-      );
-    }
-
-    return json(
-      {
-        ok: false,
-        error: "NO HAY UNA VERSION VALIDA DISPONIBLE",
-        detail: err?.message || "Error desconocido",
-      },
-      503
-    );
+  .items{
+    max-height:260px;
+    overflow-y:auto;
+    overflow-x:hidden;
+    padding-right:4px
   }
-}
+
+  .items::-webkit-scrollbar{width:6px}
+  .items::-webkit-scrollbar-thumb{
+    background:#cbd5e1;
+    border-radius:999px
+  }
+  .items::-webkit-scrollbar-track{background:transparent}
+
+  .t{
+    background:#f8fafc;
+    border:1px solid rgba(148,163,184,.14);
+    border-radius:12px;
+    padding:8px;
+    margin-bottom:6px;
+    text-align:center
+  }
+
+  .tt{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:2px;
+    margin-bottom:4px;
+    font-size:9px;
+    font-weight:900;
+    color:#64748b
+  }
+
+  .nm{
+    font-size:10px;
+    line-height:1.25;
+    font-weight:900;
+    color:#0f172a;
+    text-align:center;
+    overflow-wrap:anywhere;
+    word-break:break-word
+  }
+
+  .ax{
+    margin-top:4px;
+    font-size:9px;
+    line-height:1.2;
+    font-weight:800;
+    color:#475569;
+    text-align:center;
+    overflow-wrap:anywhere;
+    word-break:break-word
+  }
+
+  .empty{
+    background:#f8fafc;
+    border:1px dashed rgba(148,163,184,.28);
+    border-radius:12px;
+    padding:10px;
+    font-size:10px;
+    line-height:1.3;
+    font-weight:800;
+    color:#475569;
+    text-align:center
+  }
+
+  .empty.ok{
+    background:#f0fdf4;
+    border:1px dashed rgba(34,197,94,.35);
+    color:#166534;
+    font-weight:900
+  }
+
+  .nearbox{
+    background:#fffbeb;
+    border:1px dashed rgba(245,158,11,.35);
+    border-radius:12px;
+    padding:10px;
+    text-align:center
+  }
+
+  .nearlabel{
+    font-size:9px;
+    font-weight:900;
+    color:#92400e;
+    margin-bottom:4px;
+    letter-spacing:.05em
+  }
+
+  @media(max-width:780px){
+    .g{grid-template-columns:1fr}
+    .title{font-size:20px}
+    .val{font-size:18px}
+    .items{max-height:220px}
+  }
+  </style>
+
+  <div class="w">
+    <div class="hero">
+      <div class="pill">📚 CONTENIDO DEL CURSO</div>
+      <div class="title">HOY TOCA ESTUDIAR ESTO</div>
+    </div>
+
+    <div class="top">
+      <div class="lab">DÍA ACTUAL</div>
+      <div class="val">${e(d.day||"HOY")}</div>
+      <div class="txt">${e(d.mode||"TEMAS DE HOY")}. MATERIAS DEL DÍA: ${e(d.total_materias_hoy||0)}.</div>
+    </div>
+
+    <div class="g">
+      ${d.materias.length ? d.materias.map(m=>{
+        const itemsHoy = Array.isArray(m.items) ? m.items : [];
+        const total = itemsHoy.length;
+        const nearest = m.nearest_item || null;
+
+        const cardClass = total > 0 ? "c" : nearest ? "c near" : "c ok";
+        const dotClass = total > 0 ? "dot" : nearest ? "dot near" : "dot ok";
+        const badge = total > 0 ? e(total) : nearest ? "≈" : "OK";
+
+        return `
+        <div class="${cardClass}">
+          <div class="h">
+            <span class="${dotClass}"></span>
+            <span class="m">${e(m.materia)}</span>
+            <span class="q">${badge}</span>
+          </div>
+
+          ${
+            total > 0
+              ? `<div class="items">${itemsHoy.map(x=>`
+                  <div class="t">
+                    <div class="tt">
+                      <span>${e(f(x.fecha_iso||x.fecha_key))}</span>
+                      <span>${e(x.unidad||"")}</span>
+                    </div>
+                    <div class="nm">${e(x.tema||"")}</div>
+                    ${x.anexo ? `<div class="ax">${e(x.anexo)}</div>` : ""}
+                  </div>
+                `).join("")}</div>`
+              : nearest
+                ? `<div class="nearbox">
+                    <div class="nearlabel">TEMA MÁS CERCANO</div>
+                    <div class="tt">
+                      <span>${e(f(nearest.fecha_iso||nearest.fecha_key))}</span>
+                      <span>${e(nearest.unidad||"")}</span>
+                    </div>
+                    <div class="nm">${e(nearest.tema||"")}</div>
+                    ${nearest.anexo ? `<div class="ax">${e(nearest.anexo)}</div>` : ""}
+                  </div>`
+                : `<div class="empty ok">MATERIA AL DÍA</div>`
+          }
+        </div>`;
+      }).join("") : `
+        <div class="c ok" style="grid-column:1/-1">
+          <div class="h">
+            <span class="dot ok"></span>
+            <span class="m">MATERIA AL DÍA</span>
+            <span class="q">OK</span>
+          </div>
+          <div class="empty ok">NO HAY TEMAS PARA HOY.</div>
+        </div>
+      `}
+    </div>
+  </div>`;
+}).catch(()=>{
+  $("cursohoy").innerHTML=`
+  <style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent}
+  #cursohoy{font-family:Inter,Arial,sans-serif;text-transform:uppercase}
+  .e{
+    background:#fff;
+    border:1px solid rgba(220,38,38,.16);
+    border-radius:18px;
+    padding:14px;
+    box-shadow:0 8px 20px rgba(15,23,42,.06);
+    text-align:center
+  }
+  .t{
+    color:#991b1b;
+    font-size:18px;
+    font-weight:900;
+    margin-bottom:6px
+  }
+  .p{
+    color:#7f1d1d;
+    font-size:11px;
+    font-weight:800;
+    line-height:1.35
+  }
+  </style>
+  <div class="e">
+    <div class="t">NO PUDE LEER EL CURSO</div>
+    <div class="p">REVISA LA API CURSO-HOY EN VERCEL Y VUELVE A INTENTAR.</div>
+  </div>`;
+});
+</script>
