@@ -3,10 +3,12 @@
 const U="https://notion-widget-api-7nsm.vercel.app/api/curso-hoy";
 const $=s=>document.getElementById(s);
 const e=s=>String(s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-const f=d=>{if(!d)return"";let[a,b,c]=String(d).split("-");return`${c}/${b}`};
+const f=d=>{if(!d)return"";let[a,b,c]=String(d).slice(0,10).split("-");return`${c}/${b}`};
 
 fetch(U).then(r=>r.json()).then(d=>{
   if(!d.ok||!Array.isArray(d.materias)) throw 0;
+
+  const fechaReferencia=String(d.fecha_usada||d.fecha_hoy||"").slice(0,10);
 
   $("cursohoy").innerHTML=`
   <style>
@@ -98,11 +100,6 @@ fetch(U).then(r=>r.json()).then(d=>{
     border:1px solid rgba(34,197,94,.28)
   }
 
-  .c.near{
-    background:linear-gradient(180deg,#fffbeb 0%,#fef3c7 100%);
-    border:1px solid rgba(245,158,11,.28)
-  }
-
   .h{
     display:flex;
     flex-direction:column;
@@ -121,10 +118,6 @@ fetch(U).then(r=>r.json()).then(d=>{
 
   .dot.ok{
     background:radial-gradient(circle at 30% 30%,#4ade80,#16a34a)
-  }
-
-  .dot.near{
-    background:radial-gradient(circle at 30% 30%,#fbbf24,#d97706)
   }
 
   .m{
@@ -156,12 +149,6 @@ fetch(U).then(r=>r.json()).then(d=>{
     background:#ecfdf5;
     border-color:rgba(34,197,94,.25);
     color:#166534
-  }
-
-  .c.near .q{
-    background:#fffbeb;
-    border-color:rgba(245,158,11,.28);
-    color:#92400e
   }
 
   .items{
@@ -239,22 +226,6 @@ fetch(U).then(r=>r.json()).then(d=>{
     font-weight:900
   }
 
-  .nearbox{
-    background:#fffbeb;
-    border:1px dashed rgba(245,158,11,.35);
-    border-radius:12px;
-    padding:10px;
-    text-align:center
-  }
-
-  .nearlabel{
-    font-size:9px;
-    font-weight:900;
-    color:#92400e;
-    margin-bottom:4px;
-    letter-spacing:.05em
-  }
-
   @media(max-width:780px){
     .g{grid-template-columns:1fr}
     .title{font-size:20px}
@@ -272,50 +243,42 @@ fetch(U).then(r=>r.json()).then(d=>{
     <div class="top">
       <div class="lab">DÍA ACTUAL</div>
       <div class="val">${e(d.day||"HOY")}</div>
-      <div class="txt">${e(d.mode||"TEMAS DE HOY")}. MATERIAS DEL DÍA: ${e(d.total_materias_hoy||0)}.</div>
+      <div class="txt">${e(d.mode||"TEMAS DE HOY")}. FECHA MOSTRADA: ${e(f(fechaReferencia))}. MATERIAS: ${e(d.total_materias_hoy||0)}.</div>
     </div>
 
     <div class="g">
       ${d.materias.length ? d.materias.map(m=>{
-        const itemsHoy = Array.isArray(m.items) ? m.items : [];
-        const total = itemsHoy.length;
-        const nearest = m.nearest_item || null;
+        const itemsRef=Array.isArray(m.items)
+          ? m.items.filter(x=>{
+              const fx=String(x.fecha_iso||x.fecha_key||"").slice(0,10);
+              return fx===fechaReferencia;
+            })
+          : [];
 
-        const cardClass = total > 0 ? "c" : nearest ? "c near" : "c ok";
-        const dotClass = total > 0 ? "dot" : nearest ? "dot near" : "dot ok";
-        const badge = total > 0 ? e(total) : nearest ? "≈" : "OK";
+        const total=itemsRef.length;
+        const alDia=total===0;
 
         return `
-        <div class="${cardClass}">
+        <div class="c ${alDia?'ok':''}">
           <div class="h">
-            <span class="${dotClass}"></span>
+            <span class="dot ${alDia?'ok':''}"></span>
             <span class="m">${e(m.materia)}</span>
-            <span class="q">${badge}</span>
+            <span class="q">${alDia?'OK':e(total)}</span>
           </div>
 
           ${
-            total > 0
-              ? `<div class="items">${itemsHoy.map(x=>`
+            itemsRef.length
+              ? `<div class="items">${itemsRef.map(x=>`
                   <div class="t">
                     <div class="tt">
                       <span>${e(f(x.fecha_iso||x.fecha_key))}</span>
                       <span>${e(x.unidad||"")}</span>
                     </div>
                     <div class="nm">${e(x.tema||"")}</div>
-                    ${x.anexo ? `<div class="ax">${e(x.anexo)}</div>` : ""}
+                    ${x.anexo?`<div class="ax">${e(x.anexo)}</div>`:""}
                   </div>
                 `).join("")}</div>`
-              : nearest
-                ? `<div class="nearbox">
-                    <div class="nearlabel">TEMA MÁS CERCANO</div>
-                    <div class="tt">
-                      <span>${e(f(nearest.fecha_iso||nearest.fecha_key))}</span>
-                      <span>${e(nearest.unidad||"")}</span>
-                    </div>
-                    <div class="nm">${e(nearest.tema||"")}</div>
-                    ${nearest.anexo ? `<div class="ax">${e(nearest.anexo)}</div>` : ""}
-                  </div>`
-                : `<div class="empty ok">MATERIA AL DÍA</div>`
+              : `<div class="empty ok">MATERIA AL DÍA</div>`
           }
         </div>`;
       }).join("") : `
@@ -325,7 +288,7 @@ fetch(U).then(r=>r.json()).then(d=>{
             <span class="m">MATERIA AL DÍA</span>
             <span class="q">OK</span>
           </div>
-          <div class="empty ok">NO HAY TEMAS PARA HOY.</div>
+          <div class="empty ok">NO HAY TEMAS PARA LA FECHA MOSTRADA.</div>
         </div>
       `}
     </div>
